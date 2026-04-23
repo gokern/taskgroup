@@ -12,50 +12,32 @@ type ExecuteFunc func(context.Context) error
 // make the corresponding ExecuteFunc return promptly.
 type InterruptFunc func(error)
 
-type actor struct {
+// Task describes a task that can be added to a TaskGroup.
+type Task struct {
 	execute   ExecuteFunc
 	interrupt InterruptFunc
 }
 
-// Task is a handle returned by Add for configuring a task.
-type Task struct {
-	group *TaskGroup
-	index int
-}
-
-// Add appends a task to the TaskGroup.
-func (g *TaskGroup) Add(execute ExecuteFunc) *Task {
+// NewTask creates a task from execute.
+func NewTask(execute ExecuteFunc) Task {
 	if execute == nil {
 		panic("taskgroup: nil execute function")
 	}
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	g.mustNotHaveStarted()
-	g.actors = append(g.actors, actor{
-		execute: execute,
-	})
-
-	return &Task{
-		group: g,
-		index: len(g.actors) - 1,
+	return Task{
+		execute:   execute,
+		interrupt: nil,
 	}
 }
 
-// Interrupt sets the task's interrupt function. See InterruptFunc for the
-// required semantics. Passing nil panics. Calling Interrupt after the group
-// has started panics.
-func (t *Task) Interrupt(interrupt InterruptFunc) *Task {
+// Interrupt returns a copy of t with the interrupt function set; t itself is
+// unchanged. See InterruptFunc for required semantics.
+func (t Task) Interrupt(interrupt InterruptFunc) Task {
 	if interrupt == nil {
 		panic("taskgroup: nil interrupt function")
 	}
 
-	t.group.mu.Lock()
-	defer t.group.mu.Unlock()
-
-	t.group.mustNotHaveStarted()
-	t.group.actors[t.index].interrupt = interrupt
+	t.interrupt = interrupt
 
 	return t
 }

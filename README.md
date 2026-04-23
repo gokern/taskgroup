@@ -24,10 +24,12 @@ go get github.com/gokern/taskgroup
 ## At a glance
 
 - Use `taskgroup.New()` to create a one-shot group of tasks.
-- Use `tg.Add(fn)` to run a task with a context derived from `Run(ctx)`.
-- Use `tg.Add(fn).Interrupt(stop)` when a task needs explicit shutdown logic.
+- Use `tg.AddFunc(fn)` to run a simple task with a context derived from `Run(ctx)`.
+- Use `taskgroup.NewTask(fn)` to define a reusable task.
+- Use `tg.Add(task)` to run a ready-made task.
+- Use `task.Interrupt(stop)` when a task needs explicit shutdown logic.
 - Use `tg.Defer(fn)` for cleanup that must run after all tasks have exited.
-- Use `taskgroup.Signal()` to stop the group on common shutdown signals.
+- Use `taskgroup.SignalTask()` to stop the group on common shutdown signals.
 - Use `errors.Is` / `errors.As` with the error returned by `Run`.
 
 ## Why
@@ -50,12 +52,12 @@ clear owner, stop together, and clean up in the right order.
 A `TaskGroup` owns the tasks added to it. `Run` does not return until every task
 has returned.
 
-Tasks are started with `Add`:
+Simple tasks are started with `AddFunc`:
 
 ```go
 tg := taskgroup.New()
 
-tg.Add(func(ctx context.Context) error {
+tg.AddFunc(func(ctx context.Context) error {
 	return worker.Run(ctx)
 })
 
@@ -65,20 +67,43 @@ err := tg.Run(ctx)
 `TaskGroup` is run once. This keeps ownership simple: create it, configure it,
 run it, and let it go out of scope.
 
+Tasks are values, so helper packages can expose ready-to-add tasks:
+
+```go
+func APIServerTask(srv *http.Server) taskgroup.Task {
+	return taskgroup.NewTask(func(context.Context) error {
+		return srv.ListenAndServe()
+	}).Interrupt(func(error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = srv.Shutdown(ctx)
+	})
+}
+
+func run(ctx context.Context, srv *http.Server) error {
+	tasks := taskgroup.New()
+	tasks.Add(APIServerTask(srv))
+	tasks.Add(taskgroup.SignalTask())
+
+	return tasks.Run(ctx)
+}
+```
+
 ### Goal #2: Make shutdown explicit
 
 Some tasks stop by observing context cancellation. Others need explicit shutdown
 logic. `Interrupt` is for that second case.
 
 ```go
-tg.Add(func(context.Context) error {
+tg.Add(taskgroup.NewTask(func(context.Context) error {
 	return srv.ListenAndServe()
 }).Interrupt(func(error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_ = srv.Shutdown(ctx)
-})
+}))
 ```
 
 Interrupt functions run concurrently. They should be safe to call after their
@@ -107,9 +132,9 @@ tg.Defer(func(err error) error {
 - the run context error,
 - or `nil` if the first task returned successfully.
 
-Errors from `Interrupt` and `Defer` are joined with the primary error using
-`errors.Join`. Task errors after shutdown begins are ignored, but task panics
-are recovered and joined with the returned error.
+Panics from `Interrupt`, and errors or panics from `Defer`, are joined with the
+primary error using `errors.Join`. Task errors after shutdown begins are
+ignored, but task panics are recovered and joined with the returned error.
 
 ## Examples
 
@@ -156,7 +181,7 @@ func run(ctx context.Context, srv *http.Server) error {
 func run(ctx context.Context, srv *http.Server) error {
 	tg := taskgroup.New()
 
-	tg.Add(func(context.Context) error {
+	tg.Add(taskgroup.NewTask(func(context.Context) error {
 		return srv.ListenAndServe()
 	}).Interrupt(func(error) {
 		shutdownCtx, cancel := context.WithTimeout(
@@ -166,9 +191,9 @@ func run(ctx context.Context, srv *http.Server) error {
 		defer cancel()
 
 		_ = srv.Shutdown(shutdownCtx)
-	})
+	}))
 
-	tg.Add(taskgroup.Signal())
+	tg.Add(taskgroup.SignalTask())
 
 	return tg.Run(ctx)
 }
@@ -221,7 +246,7 @@ func run(ctx context.Context, api, admin *http.Server) error {
 func run(ctx context.Context, api, admin *http.Server) error {
 	tg := taskgroup.New()
 
-	tg.Add(func(context.Context) error {
+	tg.Add(taskgroup.NewTask(func(context.Context) error {
 		return api.ListenAndServe()
 	}).Interrupt(func(error) {
 		shutdownCtx, cancel := context.WithTimeout(
@@ -231,9 +256,9 @@ func run(ctx context.Context, api, admin *http.Server) error {
 		defer cancel()
 
 		_ = api.Shutdown(shutdownCtx)
-	})
+	}))
 
-	tg.Add(func(context.Context) error {
+	tg.Add(taskgroup.NewTask(func(context.Context) error {
 		return admin.ListenAndServe()
 	}).Interrupt(func(error) {
 		shutdownCtx, cancel := context.WithTimeout(
@@ -243,7 +268,7 @@ func run(ctx context.Context, api, admin *http.Server) error {
 		defer cancel()
 
 		_ = admin.Shutdown(shutdownCtx)
-	})
+	}))
 
 	return tg.Run(ctx)
 }
@@ -274,7 +299,7 @@ func run(ctx context.Context, db *sql.DB) error {
 		return db.Close()
 	})
 
-	tg.Add(func(ctx context.Context) error {
+	tg.AddFunc(func(ctx context.Context) error {
 		return runServices(ctx, db)
 	})
 
@@ -310,7 +335,7 @@ func run(ctx context.Context) error {
 func run(ctx context.Context) error {
 	tg := taskgroup.New()
 
-	tg.Add(func(ctx context.Context) error {
+	tg.AddFunc(func(ctx context.Context) error {
 		return doWork(ctx)
 	})
 
@@ -320,11 +345,11 @@ func run(ctx context.Context) error {
 
 ## Signals
 
-`taskgroup.Signal()` returns a task that waits for a shutdown signal or context
-cancellation.
+`taskgroup.SignalTask()` returns a task that waits for a shutdown signal or
+context cancellation.
 
 ```go
-tg.Add(taskgroup.Signal())
+tg.Add(taskgroup.SignalTask())
 ```
 
 On Unix, the default signals are `os.Interrupt` and `syscall.SIGTERM`. On
@@ -333,7 +358,7 @@ Windows, the default signal is `os.Interrupt`.
 You can pass custom signals:
 
 ```go
-tg.Add(taskgroup.Signal(syscall.SIGHUP, syscall.SIGTERM))
+tg.Add(taskgroup.SignalTask(syscall.SIGHUP, syscall.SIGTERM))
 ```
 
 Signal errors can be detected with `IsSignalError`:
@@ -362,7 +387,7 @@ receives a context derived from `ctx` and decides how to handle it.
 The returned error is built from:
 
 - the primary shutdown reason,
-- errors or panics from `Interrupt` functions,
+- panics from `Interrupt` functions,
 - panics from tasks after shutdown begins,
 - and errors or panics from `Defer` functions.
 

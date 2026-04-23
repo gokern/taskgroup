@@ -42,7 +42,9 @@ func TestTaskGroup_Defer(t *testing.T) {
 
 		tg.Defer(func(err error) error {
 			require.NoError(t, err)
+
 			ran = true
+
 			return nil
 		})
 
@@ -54,18 +56,22 @@ func TestTaskGroup_Defer(t *testing.T) {
 		t.Parallel()
 
 		tg := taskgroup.New()
+
 		var order []int
 
 		tg.Defer(func(error) error {
 			order = append(order, 1)
+
 			return nil
 		})
 		tg.Defer(func(error) error {
 			order = append(order, 2)
+
 			return nil
 		})
 		tg.Defer(func(error) error {
 			order = append(order, 3)
+
 			return nil
 		})
 
@@ -81,17 +87,18 @@ func TestTaskGroup_Defer(t *testing.T) {
 		interrupted := make(chan struct{})
 		expectedErr := errors.New("stop")
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			<-interrupted
 			close(taskDone)
+
 			return nil
 		}).Interrupt(func(error) {
 			close(interrupted)
-		})
+		}))
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			return expectedErr
-		})
+		}))
 
 		tg.Defer(func(error) error {
 			select {
@@ -99,6 +106,7 @@ func TestTaskGroup_Defer(t *testing.T) {
 			default:
 				t.Fatal("defer ran before all tasks completed")
 			}
+
 			return nil
 		})
 
@@ -110,14 +118,16 @@ func TestTaskGroup_Defer(t *testing.T) {
 
 		tg := taskgroup.New()
 		expectedErr := errors.New("primary")
+
 		var got error
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			return expectedErr
-		})
+		}))
 
 		tg.Defer(func(err error) error {
 			got = err
+
 			return nil
 		})
 
@@ -132,9 +142,9 @@ func TestTaskGroup_Defer(t *testing.T) {
 		primaryErr := errors.New("primary")
 		deferErr := errors.New("defer")
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			return primaryErr
-		})
+		}))
 
 		tg.Defer(func(error) error {
 			return deferErr
@@ -150,10 +160,12 @@ func TestTaskGroup_Defer(t *testing.T) {
 
 		tg := taskgroup.New()
 		panicErr := errors.New("defer panic")
+
 		var ran bool
 
 		tg.Defer(func(error) error {
 			ran = true
+
 			return nil
 		})
 		tg.Defer(func(error) error {
@@ -171,9 +183,9 @@ func TestTaskGroup_Defer(t *testing.T) {
 		tg := taskgroup.New()
 		deferErr := errors.New("defer")
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			return nil
-		})
+		}))
 
 		tg.Defer(func(error) error {
 			return deferErr

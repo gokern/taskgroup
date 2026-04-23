@@ -11,7 +11,7 @@ type DeferFunc func(error) error
 //
 // Deferred functions run after all tasks have returned, in last-in-first-out
 // order, like Go defer statements.
-func (g *TaskGroup) Defer(fn DeferFunc) *TaskGroup {
+func (g *TaskGroup) Defer(fn DeferFunc) {
 	if fn == nil {
 		panic("taskgroup: nil defer function")
 	}
@@ -21,12 +21,11 @@ func (g *TaskGroup) Defer(fn DeferFunc) *TaskGroup {
 
 	g.mustNotHaveStarted()
 	g.defers = append(g.defers, fn)
-
-	return g
 }
 
 func runDefers(defers []DeferFunc, err error) []error {
 	errs := make([]error, 0, len(defers))
+
 	for i := len(defers) - 1; i >= 0; i-- {
 		deferErr := recoverError(func() error {
 			return defers[i](err)

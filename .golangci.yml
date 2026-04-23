@@ -25,12 +25,6 @@ linters:
   default: all
   disable:
     - wsl # Deprecated, replaced by wsl_v5.
-    - wsl_v5 # Whitespace grouping is too style-opinionated.
-    - nlreturn # Mandatory blank lines before returns are too style-opinionated.
-    - noinlineerr # Inline error checks are idiomatic in small Go functions.
-    - exhaustruct # Requiring every struct literal field is too strict.
-    - tagliatelle # Struct tag naming is application-specific.
-    - mnd # Small numeric constants are often clearer than named constants.
   settings:
     depguard:
       rules:
@@ -41,36 +35,17 @@ linters:
             - github.com/stretchr/testify
     varnamelen:
       ignore-names:
-        - a
-        - db
-        - fn
         - i
-        - pc
-        - sig
-        - tg
-        - tt
         - wg
+        - tg
+        - fn
   exclusions:
     rules:
       - path: _test\.go
         linters:
           - err113
           - funlen
-          - gosec
-          - paralleltest
-          - varnamelen
       - path: taskgroup_test\.go
         text: "SA1012:"
         linters:
           - staticcheck
-      - path: errors\.go
-        linters:
-          - err113
-          - nonamedreturns
-      - path: signal_error\.go
-        linters:
-          - errname
-          - gochecknoglobals
-
-issues:
-  max-same-issues: 50

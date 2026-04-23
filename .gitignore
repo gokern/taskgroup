@@ -1,10 +1,9 @@
 # Hidden entries at the repo root (dotfiles/dotdirs): ignore by default,
-# then allow the ones we actually want to track.
+# then allow the dotfiles we actually want to track.
 /.[!.]*
 /.?*
 !/.gitignore
 !/.golangci.yml
-!/.github
 
 # Go build / test artifacts
 *.exe

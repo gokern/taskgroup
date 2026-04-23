@@ -14,23 +14,55 @@ import (
 func TestTaskGroup_Add(t *testing.T) {
 	t.Parallel()
 
+	t.Run("zero task", func(t *testing.T) {
+		t.Parallel()
+
+		tg := taskgroup.New()
+
+		require.PanicsWithValue(t,
+			"taskgroup: uninitialized Task (use NewTask)",
+			func() { tg.Add(taskgroup.Task{}) },
+		)
+	})
+
 	t.Run("nil execute function", func(t *testing.T) {
+		t.Parallel()
+
+		require.Panics(t, func() {
+			taskgroup.NewTask(nil)
+		})
+	})
+
+	t.Run("add func", func(t *testing.T) {
+		t.Parallel()
+
+		tg := taskgroup.New()
+		expectedErr := errors.New("task error")
+
+		tg.AddFunc(func(context.Context) error {
+			return expectedErr
+		})
+
+		require.ErrorIs(t, tg.Run(context.Background()), expectedErr)
+	})
+
+	t.Run("add nil func", func(t *testing.T) {
 		t.Parallel()
 
 		tg := taskgroup.New()
 
 		require.Panics(t, func() {
-			tg.Add(nil)
+			tg.AddFunc(nil)
 		})
 	})
 
 	t.Run("nil interrupt function", func(t *testing.T) {
 		t.Parallel()
 
-		tg := taskgroup.New()
+		task := taskgroup.NewTask(func(context.Context) error { return nil })
 
 		require.Panics(t, func() {
-			tg.Add(func(context.Context) error { return nil }).Interrupt(nil)
+			task.Interrupt(nil)
 		})
 	})
 
@@ -41,19 +73,18 @@ func TestTaskGroup_Add(t *testing.T) {
 
 		require.NoError(t, tg.Run(context.Background()))
 		require.Panics(t, func() {
-			tg.Add(func(context.Context) error { return nil })
+			tg.Add(taskgroup.NewTask(func(context.Context) error { return nil }))
 		})
 	})
 
-	t.Run("interrupt after run", func(t *testing.T) {
+	t.Run("add func after run", func(t *testing.T) {
 		t.Parallel()
 
 		tg := taskgroup.New()
-		task := tg.Add(func(context.Context) error { return nil })
 
 		require.NoError(t, tg.Run(context.Background()))
 		require.Panics(t, func() {
-			task.Interrupt(func(error) {})
+			tg.AddFunc(func(context.Context) error { return nil })
 		})
 	})
 }
@@ -85,7 +116,7 @@ func TestTaskGroup_Run(t *testing.T) {
 		tg := taskgroup.New()
 		expectedErr := errors.New("task error")
 
-		tg.Add(func(context.Context) error {
+		tg.AddFunc(func(context.Context) error {
 			return expectedErr
 		})
 
@@ -101,8 +132,9 @@ func TestTaskGroup_Run(t *testing.T) {
 		tg := taskgroup.New()
 		ctx := context.WithValue(context.Background(), contextKey{}, "value")
 
-		tg.Add(func(ctx context.Context) error {
+		tg.AddFunc(func(ctx context.Context) error {
 			require.Equal(t, "value", ctx.Value(contextKey{}))
+
 			return nil
 		})
 
@@ -115,10 +147,12 @@ func TestTaskGroup_Run(t *testing.T) {
 		tg := taskgroup.New()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
+
 		ran := false
 
-		tg.Add(func(ctx context.Context) error {
+		tg.AddFunc(func(ctx context.Context) error {
 			ran = true
+
 			return ctx.Err()
 		})
 
@@ -136,13 +170,14 @@ func TestTaskGroup_Run(t *testing.T) {
 		interrupted := make(chan error, 1)
 		result := make(chan error, 1)
 
-		tg.Add(func(ctx context.Context) error {
+		tg.Add(taskgroup.NewTask(func(ctx context.Context) error {
 			close(started)
 			<-ctx.Done()
+
 			return ctx.Err()
 		}).Interrupt(func(err error) {
 			interrupted <- err
-		})
+		}))
 
 		go func() {
 			result <- tg.Run(ctx)
@@ -163,14 +198,15 @@ func TestTaskGroup_Run(t *testing.T) {
 		interrupted := make(chan struct{})
 		expectedErr := errors.New("returning early")
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			<-interrupted
+
 			return nil
 		}).Interrupt(func(error) {
 			close(interrupted)
-		})
+		}))
 
-		tg.Add(func(context.Context) error {
+		tg.AddFunc(func(context.Context) error {
 			return expectedErr
 		})
 
@@ -183,12 +219,12 @@ func TestTaskGroup_Run(t *testing.T) {
 
 		tg := taskgroup.New()
 
-		tg.Add(func(context.Context) error {
+		tg.AddFunc(func(context.Context) error {
 			panic("test panic")
 		})
 
 		err := tg.Run(context.Background())
-		require.Error(t, err)
+		require.ErrorIs(t, err, taskgroup.ErrPanic)
 		require.Contains(t, err.Error(), "test panic")
 	})
 
@@ -200,14 +236,14 @@ func TestTaskGroup_Run(t *testing.T) {
 		primaryErr := errors.New("primary")
 		panicErr := errors.New("secondary panic")
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			<-interrupted
 			panic(panicErr)
 		}).Interrupt(func(error) {
 			close(interrupted)
-		})
+		}))
 
-		tg.Add(func(context.Context) error {
+		tg.AddFunc(func(context.Context) error {
 			return primaryErr
 		})
 
@@ -223,11 +259,11 @@ func TestTaskGroup_Run(t *testing.T) {
 		primaryErr := errors.New("primary")
 		interruptErr := errors.New("interrupt")
 
-		tg.Add(func(context.Context) error {
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
 			return primaryErr
 		}).Interrupt(func(error) {
 			panic(interruptErr)
-		})
+		}))
 
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, primaryErr)
@@ -243,20 +279,23 @@ func TestTaskGroup_Run(t *testing.T) {
 		primaryErr := errors.New("primary")
 
 		for range 2 {
-			tg.Add(func(ctx context.Context) error {
+			tg.Add(taskgroup.NewTask(func(ctx context.Context) error {
 				<-ctx.Done()
+
 				return nil
 			}).Interrupt(func(error) {
 				interruptStarted <- struct{}{}
+
 				<-releaseInterrupts
-			})
+			}))
 		}
 
-		tg.Add(func(context.Context) error {
+		tg.AddFunc(func(context.Context) error {
 			return primaryErr
 		})
 
 		result := make(chan error, 1)
+
 		go func() {
 			result <- tg.Run(context.Background())
 		}()

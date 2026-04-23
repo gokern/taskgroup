@@ -5,10 +5,7 @@ import (
 	"os"
 )
 
-// Interrupt is the signal error for os.Interrupt.
-var Interrupt = signalError{os.Interrupt}
-
-var _ os.Signal = signalError{}
+var _ os.Signal = signalError{} //nolint:exhaustruct
 
 type signalError struct {
 	sig os.Signal
@@ -24,7 +21,7 @@ func (err signalError) Error() string {
 	return err.sig.String()
 }
 
-// IsSignalError reports whether err contains an error returned by Signal.
+// IsSignalError reports whether err contains an error returned by SignalTask.
 func IsSignalError(err error) bool {
 	_, ok := errors.AsType[signalError](err)
 

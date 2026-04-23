@@ -15,13 +15,34 @@ type TaskGroup struct {
 	mu      sync.Mutex
 	started bool
 
-	actors []actor
+	tasks  []Task
 	defers []DeferFunc
 }
 
 // New creates an empty TaskGroup.
 func New() *TaskGroup {
-	return &TaskGroup{}
+	return new(TaskGroup)
+}
+
+// Add appends a task to the TaskGroup.
+//
+// Add panics on an uninitialized Task; use NewTask (or helpers like SignalTask)
+// to construct one.
+func (g *TaskGroup) Add(task Task) {
+	if task.execute == nil {
+		panic("taskgroup: uninitialized Task (use NewTask)")
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.mustNotHaveStarted()
+	g.tasks = append(g.tasks, task)
+}
+
+// AddFunc appends a task created from execute to the TaskGroup.
+func (g *TaskGroup) AddFunc(execute ExecuteFunc) {
+	g.Add(NewTask(execute))
 }
 
 // Run executes all tasks in the group.
@@ -30,36 +51,37 @@ func New() *TaskGroup {
 // first task returns without error. Tasks are started even when ctx is already
 // canceled; each task receives ctx and decides how to handle it.
 //
-// Errors and panics from interrupt and deferred cleanup functions are joined
-// with the primary error. Ordinary task errors after shutdown begins are
-// dropped, but task panics after shutdown are recovered and joined with the
-// returned error.
+// Panics from interrupt functions, and errors or panics from deferred cleanup
+// functions, are joined with the primary error. Ordinary task errors after
+// shutdown begins are dropped, but task panics after shutdown are recovered and
+// joined with the returned error.
 func (g *TaskGroup) Run(ctx context.Context) error {
 	if ctx == nil {
 		panic("taskgroup: nil context")
 	}
 
-	actors, defers := g.start()
+	tasks, defers := g.start()
+
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	runErrs, err := run(runCtx, cancel, actors)
+	runErrs, err := run(runCtx, cancel, tasks)
 	deferErrs := runDefers(defers, err)
 
 	return joinErrors(err, runErrs, deferErrs)
 }
 
-func (g *TaskGroup) start() ([]actor, []DeferFunc) {
+func (g *TaskGroup) start() ([]Task, []DeferFunc) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	g.mustNotHaveStarted()
 	g.started = true
 
-	actors := append([]actor(nil), g.actors...)
+	tasks := append([]Task(nil), g.tasks...)
 	defers := append([]DeferFunc(nil), g.defers...)
 
-	return actors, defers
+	return tasks, defers
 }
 
 func (g *TaskGroup) mustNotHaveStarted() {
@@ -68,19 +90,17 @@ func (g *TaskGroup) mustNotHaveStarted() {
 	}
 }
 
-func run(ctx context.Context, cancel context.CancelFunc, actors []actor) ([]error, error) {
-	if len(actors) == 0 {
+func run(ctx context.Context, cancel context.CancelFunc, tasks []Task) ([]error, error) {
+	if len(tasks) == 0 {
 		return nil, nil
 	}
 
-	results := make(chan taskResult, len(actors))
+	results := make(chan taskResult, len(tasks))
 
 	var wg sync.WaitGroup
-	for _, a := range actors {
+	for _, task := range tasks {
 		wg.Go(func() {
-			results <- recoverTask(func() error {
-				return a.execute(ctx)
-			})
+			results <- recoverTask(func() error { return task.execute(ctx) })
 		})
 	}
 
@@ -92,43 +112,31 @@ func run(ctx context.Context, cancel context.CancelFunc, actors []actor) ([]erro
 	}
 
 	cancel()
-	interruptErrs := interrupt(actors, result.err)
+
+	interruptErrs := interrupt(tasks, result.err)
+
 	wg.Wait()
 	close(results)
 
-	runErrs := interruptErrs
-	runErrs = append(runErrs, taskPanicErrors(results)...)
+	interruptErrs = append(interruptErrs, taskPanicErrors(results)...)
 
-	return runErrs, result.err
+	return interruptErrs, result.err
 }
 
-func interrupt(actors []actor, err error) []error {
-	var count int
-	for _, a := range actors {
-		if a.interrupt != nil {
-			count++
-		}
-	}
-	if count == 0 {
-		return nil
-	}
-
-	errs := make([]error, count)
+func interrupt(tasks []Task, err error) []error {
+	errs := make([]error, len(tasks))
 
 	var wg sync.WaitGroup
-	var i int
-	for _, a := range actors {
-		if a.interrupt == nil {
+
+	for idx, task := range tasks {
+		if task.interrupt == nil {
 			continue
 		}
 
-		interrupt := a.interrupt
-		index := i
-		i++
-
 		wg.Go(func() {
-			errs[index] = recoverError(func() error {
-				interrupt(err)
+			errs[idx] = recoverError(func() error {
+				task.interrupt(err)
+
 				return nil
 			})
 		})
@@ -141,6 +149,7 @@ func interrupt(actors []actor, err error) []error {
 
 func taskPanicErrors(results <-chan taskResult) []error {
 	errs := make([]error, 0, len(results))
+
 	for result := range results {
 		if result.panic {
 			errs = append(errs, result.err)

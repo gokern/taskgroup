@@ -18,13 +18,18 @@ func TestIsSignalError(t *testing.T) {
 	t.Run("when signal error", func(t *testing.T) {
 		t.Parallel()
 
-		require.True(t, taskgroup.IsSignalError(taskgroup.Interrupt))
+		require.True(t, taskgroup.IsSignalError(taskgroup.NewSignalError(os.Interrupt)))
 	})
 
 	t.Run("when wrapped signal error", func(t *testing.T) {
 		t.Parallel()
 
-		require.True(t, taskgroup.IsSignalError(fmt.Errorf("wrapped: %w", taskgroup.Interrupt)))
+		require.True(
+			t,
+			taskgroup.IsSignalError(
+				fmt.Errorf("wrapped: %w", taskgroup.NewSignalError(os.Interrupt)),
+			),
+		)
 	})
 
 	t.Run("when there is no signal error", func(t *testing.T) {
@@ -34,13 +39,19 @@ func TestIsSignalError(t *testing.T) {
 	})
 }
 
-func TestSignal(t *testing.T) {
+func TestSignalTask(t *testing.T) {
+	t.Parallel()
+
 	t.Run("context cancelled", func(t *testing.T) {
+		t.Parallel()
+
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := taskgroup.Signal()(ctx)
-		require.ErrorIs(t, err, context.Canceled)
+		tg := taskgroup.New()
+		tg.Add(taskgroup.SignalTask())
+
+		require.ErrorIs(t, tg.Run(ctx), context.Canceled)
 	})
 }
 
@@ -50,7 +61,7 @@ func TestSignalFromError(t *testing.T) {
 	t.Run("when signal error", func(t *testing.T) {
 		t.Parallel()
 
-		sig, ok := taskgroup.SignalFromError(taskgroup.Interrupt)
+		sig, ok := taskgroup.SignalFromError(taskgroup.NewSignalError(os.Interrupt))
 		require.True(t, ok)
 		require.Equal(t, os.Interrupt, sig)
 	})
@@ -58,7 +69,9 @@ func TestSignalFromError(t *testing.T) {
 	t.Run("when wrapped signal error", func(t *testing.T) {
 		t.Parallel()
 
-		sig, ok := taskgroup.SignalFromError(fmt.Errorf("wrapped: %w", taskgroup.Interrupt))
+		sig, ok := taskgroup.SignalFromError(
+			fmt.Errorf("wrapped: %w", taskgroup.NewSignalError(os.Interrupt)),
+		)
 		require.True(t, ok)
 		require.Equal(t, os.Interrupt, sig)
 	})

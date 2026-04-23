@@ -3,6 +3,7 @@ package taskgroup
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 type taskResult struct {
@@ -10,7 +11,7 @@ type taskResult struct {
 	panic bool
 }
 
-func recoverTask(fn func() error) (result taskResult) {
+func recoverTask(fn func() error) (result taskResult) { //nolint:nonamedreturns
 	defer func() {
 		if pc := recover(); pc != nil {
 			result.err = panicToError(pc)
@@ -33,12 +34,16 @@ func recoverError(fn func() error) (err error) {
 	return fn()
 }
 
+// ErrPanic is the sentinel that wraps every panic recovered by the package.
+// Test with errors.Is(err, taskgroup.ErrPanic) to detect a recovered panic.
+var ErrPanic = errors.New("panic")
+
 func panicToError(pc any) error {
 	if err, ok := pc.(error); ok {
-		return fmt.Errorf("panic: %w", err)
+		return fmt.Errorf("%w: %w", ErrPanic, err)
 	}
 
-	return fmt.Errorf("panic: %v", pc)
+	return fmt.Errorf("%w: %v", ErrPanic, pc)
 }
 
 func joinErrors(primary error, errGroups ...[]error) error {
@@ -55,12 +60,5 @@ func joinErrors(primary error, errGroups ...[]error) error {
 }
 
 func compactErrors(errs []error) []error {
-	result := make([]error, 0, len(errs))
-	for _, err := range errs {
-		if err != nil {
-			result = append(result, err)
-		}
-	}
-
-	return result
+	return slices.DeleteFunc(errs, func(err error) bool { return err == nil })
 }
