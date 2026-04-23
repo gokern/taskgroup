@@ -6,12 +6,19 @@ import (
 	"slices"
 )
 
+// ErrPanic is the sentinel that wraps every panic recovered by the package.
+// Test with errors.Is(err, taskgroup.ErrPanic) to detect a recovered panic.
+var ErrPanic = errors.New("panic")
+
 type taskResult struct {
 	err   error
 	panic bool
 }
 
-func recoverTask(fn func() error) (result taskResult) { //nolint:nonamedreturns
+// Named return lets the deferred recover set result on panic.
+//
+//nolint:nonamedreturns
+func recoverTask(fn func() error) (result taskResult) {
 	defer func() {
 		if pc := recover(); pc != nil {
 			result.err = panicToError(pc)
@@ -33,10 +40,6 @@ func recoverError(fn func() error) (err error) {
 
 	return fn()
 }
-
-// ErrPanic is the sentinel that wraps every panic recovered by the package.
-// Test with errors.Is(err, taskgroup.ErrPanic) to detect a recovered panic.
-var ErrPanic = errors.New("panic")
 
 func panicToError(pc any) error {
 	if err, ok := pc.(error); ok {

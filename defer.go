@@ -2,9 +2,8 @@ package taskgroup
 
 // DeferFunc runs after all tasks have returned.
 //
-// It receives the primary shutdown error: the first task error (including a
-// recovered panic from the first task to return), the run context error, or
-// nil when the first task returned without error.
+// It receives the primary shutdown error: the first task error or recovered
+// panic, the run context error, or nil when the first task returned cleanly.
 type DeferFunc func(error) error
 
 // Defer appends a cleanup function to the TaskGroup.

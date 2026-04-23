@@ -18,9 +18,10 @@ func TestTaskGroup_Defer(t *testing.T) {
 
 		tg := taskgroup.New()
 
-		require.Panics(t, func() {
-			tg.Defer(nil)
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: nil defer function",
+			func() { tg.Defer(nil) },
+		)
 	})
 
 	t.Run("defer after run", func(t *testing.T) {
@@ -29,9 +30,10 @@ func TestTaskGroup_Defer(t *testing.T) {
 		tg := taskgroup.New()
 
 		require.NoError(t, tg.Run(context.Background()))
-		require.Panics(t, func() {
-			tg.Defer(func(error) error { return nil })
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: TaskGroup already started",
+			func() { tg.Defer(func(error) error { return nil }) },
+		)
 	})
 
 	t.Run("runs without tasks", func(t *testing.T) {
@@ -174,6 +176,7 @@ func TestTaskGroup_Defer(t *testing.T) {
 
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, panicErr)
+		require.ErrorIs(t, err, taskgroup.ErrPanic)
 		require.True(t, ran)
 	})
 

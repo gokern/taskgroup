@@ -12,8 +12,12 @@ import (
 // When no signals are provided, SignalTask listens for the platform's standard
 // shutdown signals.
 //
-// On signal the task returns an opaque error. Detect it with IsSignalError,
-// and extract the concrete os.Signal with SignalFromError.
+// On signal the task returns an opaque error. Detect it with IsSignalError
+// and extract the signal with SignalFromError.
+//
+// Signals delivered before the task body runs get the OS default action.
+// Programs that need to catch signals at startup should call signal.Notify
+// or signal.Ignore before Run.
 func SignalTask(signals ...os.Signal) Task {
 	if len(signals) == 0 {
 		signals = defaultSignals()

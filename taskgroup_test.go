@@ -28,9 +28,10 @@ func TestTaskGroup_Add(t *testing.T) {
 	t.Run("nil execute function", func(t *testing.T) {
 		t.Parallel()
 
-		require.Panics(t, func() {
-			taskgroup.NewTask(nil)
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: nil execute function",
+			func() { taskgroup.NewTask(nil) },
+		)
 	})
 
 	t.Run("add func", func(t *testing.T) {
@@ -51,9 +52,10 @@ func TestTaskGroup_Add(t *testing.T) {
 
 		tg := taskgroup.New()
 
-		require.Panics(t, func() {
-			tg.AddFunc(nil)
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: nil execute function",
+			func() { tg.AddFunc(nil) },
+		)
 	})
 
 	t.Run("nil interrupt function", func(t *testing.T) {
@@ -61,9 +63,10 @@ func TestTaskGroup_Add(t *testing.T) {
 
 		task := taskgroup.NewTask(func(context.Context) error { return nil })
 
-		require.Panics(t, func() {
-			task.Interrupt(nil)
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: nil interrupt function",
+			func() { task.Interrupt(nil) },
+		)
 	})
 
 	t.Run("add after run", func(t *testing.T) {
@@ -72,9 +75,12 @@ func TestTaskGroup_Add(t *testing.T) {
 		tg := taskgroup.New()
 
 		require.NoError(t, tg.Run(context.Background()))
-		require.Panics(t, func() {
-			tg.Add(taskgroup.NewTask(func(context.Context) error { return nil }))
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: TaskGroup already started",
+			func() {
+				tg.Add(taskgroup.NewTask(func(context.Context) error { return nil }))
+			},
+		)
 	})
 
 	t.Run("add func after run", func(t *testing.T) {
@@ -83,9 +89,10 @@ func TestTaskGroup_Add(t *testing.T) {
 		tg := taskgroup.New()
 
 		require.NoError(t, tg.Run(context.Background()))
-		require.Panics(t, func() {
-			tg.AddFunc(func(context.Context) error { return nil })
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: TaskGroup already started",
+			func() { tg.AddFunc(func(context.Context) error { return nil }) },
+		)
 	})
 }
 
@@ -105,9 +112,10 @@ func TestTaskGroup_Run(t *testing.T) {
 
 		tg := taskgroup.New()
 
-		require.Panics(t, func() {
-			_ = tg.Run(nil)
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: nil context",
+			func() { _ = tg.Run(nil) },
+		)
 	})
 
 	t.Run("returns first task error", func(t *testing.T) {
@@ -250,6 +258,7 @@ func TestTaskGroup_Run(t *testing.T) {
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, primaryErr)
 		require.ErrorIs(t, err, panicErr)
+		require.ErrorIs(t, err, taskgroup.ErrPanic)
 	})
 
 	t.Run("joins interrupt panic with primary error", func(t *testing.T) {
@@ -268,6 +277,7 @@ func TestTaskGroup_Run(t *testing.T) {
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, primaryErr)
 		require.ErrorIs(t, err, interruptErr)
+		require.ErrorIs(t, err, taskgroup.ErrPanic)
 	})
 
 	t.Run("runs interrupts concurrently", func(t *testing.T) {
@@ -319,8 +329,9 @@ func TestTaskGroup_Run(t *testing.T) {
 		tg := taskgroup.New()
 
 		require.NoError(t, tg.Run(context.Background()))
-		require.Panics(t, func() {
-			_ = tg.Run(context.Background())
-		})
+		require.PanicsWithValue(t,
+			"taskgroup: TaskGroup already started",
+			func() { _ = tg.Run(context.Background()) },
+		)
 	})
 }

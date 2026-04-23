@@ -48,13 +48,17 @@ func (g *TaskGroup) AddFunc(execute ExecuteFunc) {
 // Run executes all tasks in the group.
 //
 // Run returns the first task error, the run context error, or nil when the
-// first task returns without error. Tasks are started even when ctx is already
-// canceled; each task receives ctx and decides how to handle it.
+// first task returns cleanly. With no tasks Run returns nil and only runs
+// deferred cleanup, even if ctx is already canceled. Tasks are started even
+// when ctx is already canceled; each task sees ctx and decides how to handle
+// it. If a task result and ctx cancellation arrive simultaneously, either
+// one may become the primary error.
 //
-// Panics from interrupt functions, and errors or panics from deferred cleanup
-// functions, are joined with the primary error. Ordinary task errors after
-// shutdown begins are dropped, but task panics after shutdown are recovered and
-// joined with the returned error.
+// Panics from interrupt functions, and errors or panics from deferred
+// cleanup, are joined with the primary error. Ordinary task errors after
+// shutdown are dropped, but task panics after shutdown are recovered and
+// joined. Every recovered panic is wrapped so errors.Is(err, ErrPanic) is
+// true.
 func (g *TaskGroup) Run(ctx context.Context) error {
 	if ctx == nil {
 		panic("taskgroup: nil context")
