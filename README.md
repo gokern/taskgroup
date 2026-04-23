@@ -1,4 +1,4 @@
-# `taskgroup`: scoped task lifecycles for Go
+# `taskgroup`: scoped lifecycles for long-running Go tasks
 
 [![CI](https://github.com/gokern/taskgroup/actions/workflows/ci.yml/badge.svg)](https://github.com/gokern/taskgroup/actions/workflows/ci.yml)
 [![Lint](https://github.com/gokern/taskgroup/actions/workflows/lint.yml/badge.svg)](https://github.com/gokern/taskgroup/actions/workflows/lint.yml)
@@ -10,148 +10,54 @@
 [![License](https://img.shields.io/github/license/gokern/taskgroup)](LICENSE)
 
 <p align="center">
-  <img src="img/preview.png" alt="taskgroup — scoped task lifecycles for Go" width="900">
+  <img src="img/preview.png" alt="taskgroup: scoped task lifecycles for Go" width="900">
 </p>
 
-`taskgroup` helps wire together long-running tasks that should live and stop as
-one unit: servers, workers, signal handlers, background loops, and cleanup
-steps.
+Starting goroutines in Go is easy. Getting them to stop together, in order, with cleanup that actually runs? That's the part where `main.go` quietly goes from neat to tangled. `taskgroup` handles that lifecycle for you.
+
+## Install
 
 ```sh
 go get github.com/gokern/taskgroup
 ```
 
-## At a glance
+Requires Go 1.26+.
 
-- Use `taskgroup.New()` to create a one-shot group of tasks.
-- Use `tg.AddFunc(fn)` to run a simple task with a context derived from `Run(ctx)`.
-- Use `taskgroup.NewTask(fn)` to define a reusable task.
-- Use `tg.Add(task)` to run a ready-made task.
-- Use `task.Interrupt(stop)` when a task needs explicit shutdown logic.
-- Use `tg.Defer(fn)` for cleanup that must run after all tasks have exited.
-- Use `taskgroup.SignalTask()` to stop the group on common shutdown signals.
-- Use `errors.Is` / `errors.As` with the error returned by `Run`.
+## Example
 
-## Why
+An HTTP server that stops on Ctrl-C, shuts down gracefully, and closes a database on the way out.
 
-Go makes it easy to start goroutines. It is harder to make sure they have a
-clear owner, stop together, and clean up in the right order.
-
-`taskgroup` is intentionally small. It focuses on one pattern:
-
-1. Start a set of related tasks.
-2. Wait for the first task to return, or for the run context to be canceled.
-3. Interrupt the rest of the tasks.
-4. Wait for all tasks to exit.
-5. Run deferred cleanup functions in last-in-first-out order.
-
-## Goals
-
-### Goal #1: Keep task lifetimes scoped
-
-A `TaskGroup` owns the tasks added to it. `Run` does not return until every task
-has returned.
-
-Simple tasks are started with `AddFunc`:
+With `taskgroup`:
 
 ```go
-tg := taskgroup.New()
+func run(ctx context.Context, srv *http.Server, db *sql.DB) error {
+	tg := taskgroup.New()
 
-tg.AddFunc(func(ctx context.Context) error {
-	return worker.Run(ctx)
-})
-
-err := tg.Run(ctx)
-```
-
-`TaskGroup` is run once. This keeps ownership simple: create it, configure it,
-run it, and let it go out of scope.
-
-Tasks are values, so helper packages can expose ready-to-add tasks:
-
-```go
-func APIServerTask(srv *http.Server) taskgroup.Task {
-	return taskgroup.NewTask(func(context.Context) error {
+	tg.Add(taskgroup.NewTask(func(context.Context) error {
 		return srv.ListenAndServe()
 	}).Interrupt(func(error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}))
 
-		_ = srv.Shutdown(ctx)
-	})
-}
+	tg.Add(taskgroup.SignalTask())
+	tg.Defer(func(error) error { return db.Close() })
 
-func run(ctx context.Context, srv *http.Server) error {
-	tasks := taskgroup.New()
-	tasks.Add(APIServerTask(srv))
-	tasks.Add(taskgroup.SignalTask())
-
-	return tasks.Run(ctx)
+	return tg.Run(ctx)
 }
 ```
 
-### Goal #2: Make shutdown explicit
-
-Some tasks stop by observing context cancellation. Others need explicit shutdown
-logic. `Interrupt` is for that second case.
+Same thing hand-rolled:
 
 ```go
-tg.Add(taskgroup.NewTask(func(context.Context) error {
-	return srv.ListenAndServe()
-}).Interrupt(func(error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_ = srv.Shutdown(ctx)
-}))
-```
-
-Interrupt functions run concurrently. They should be safe to call after their
-task has already returned, and they should make the task return promptly.
-
-### Goal #3: Keep cleanup ordered
-
-`Defer` runs after all tasks have exited. Multiple deferred functions run in
-last-in-first-out order, like Go `defer` statements.
-
-```go
-tg.Defer(func(err error) error {
-	return metrics.Flush()
-})
-
-tg.Defer(func(err error) error {
-	return logs.Sync()
-})
-```
-
-### Goal #4: Return useful errors
-
-`Run` returns the primary shutdown reason:
-
-- the first task error,
-- the run context error,
-- or `nil` if the first task returned successfully.
-
-Panics from `Interrupt`, and errors or panics from `Defer`, are joined with the
-primary error using `errors.Join`. Task errors after shutdown begins are
-ignored, but task panics are recovered and joined with the returned error.
-
-## Examples
-
-### Run a server until a signal arrives
-
-#### `stdlib`
-
-```go
-func run(ctx context.Context, srv *http.Server) error {
+func run(ctx context.Context, srv *http.Server, db *sql.DB) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
 	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- srv.ListenAndServe()
-	}()
+	go func() { serverErr <- srv.ListenAndServe() }()
 
 	var err error
 	select {
@@ -162,241 +68,40 @@ func run(ctx context.Context, srv *http.Server) error {
 		err = ctx.Err()
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(
-		context.Background(),
-		5*time.Second,
-	)
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil {
-		return errors.Join(err, shutdownErr)
-	}
-	return err
+	return errors.Join(err, srv.Shutdown(sctx), db.Close())
 }
 ```
 
-#### `taskgroup`
+Each block in the first version handles one thing: the server, the signal listener, the cleanup. The second merges all of it into one select. Adding a fourth concern to that version means rewriting the select.
 
-```go
-func run(ctx context.Context, srv *http.Server) error {
-	tg := taskgroup.New()
+## API
 
-	tg.Add(taskgroup.NewTask(func(context.Context) error {
-		return srv.ListenAndServe()
-	}).Interrupt(func(error) {
-		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
-		defer cancel()
+- `taskgroup.New()` creates a group.
+- `tg.AddFunc(fn)` adds a task.
+- `tg.Add(taskgroup.NewTask(fn).Interrupt(stop))` adds a task with an explicit stop hook.
+- `tg.Add(taskgroup.SignalTask())` stops the group on standard shutdown signals.
+- `tg.Defer(fn)` runs cleanup after every task exits, LIFO like Go `defer`.
+- `tg.Run(ctx)` starts everything and returns the first error.
 
-		_ = srv.Shutdown(shutdownCtx)
-	}))
-
-	tg.Add(taskgroup.SignalTask())
-
-	return tg.Run(ctx)
-}
-```
-
-### Run several services as one unit
-
-#### `stdlib`
-
-```go
-func run(ctx context.Context, api, admin *http.Server) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	errs := make(chan error, 2)
-
-	go func() {
-		errs <- api.ListenAndServe()
-	}()
-	go func() {
-		errs <- admin.ListenAndServe()
-	}()
-
-	var err error
-	select {
-	case err = <-errs:
-	case <-ctx.Done():
-		err = ctx.Err()
-	}
-
-	cancel()
-
-	shutdownCtx, stop := context.WithTimeout(
-		context.Background(),
-		5*time.Second,
-	)
-	defer stop()
-
-	return errors.Join(
-		err,
-		api.Shutdown(shutdownCtx),
-		admin.Shutdown(shutdownCtx),
-	)
-}
-```
-
-#### `taskgroup`
-
-```go
-func run(ctx context.Context, api, admin *http.Server) error {
-	tg := taskgroup.New()
-
-	tg.Add(taskgroup.NewTask(func(context.Context) error {
-		return api.ListenAndServe()
-	}).Interrupt(func(error) {
-		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
-		defer cancel()
-
-		_ = api.Shutdown(shutdownCtx)
-	}))
-
-	tg.Add(taskgroup.NewTask(func(context.Context) error {
-		return admin.ListenAndServe()
-	}).Interrupt(func(error) {
-		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
-		defer cancel()
-
-		_ = admin.Shutdown(shutdownCtx)
-	}))
-
-	return tg.Run(ctx)
-}
-```
-
-### Cleanup after every task exits
-
-#### `stdlib`
-
-```go
-func run(ctx context.Context, db *sql.DB) error {
-	err := runServices(ctx, db)
-
-	if closeErr := db.Close(); closeErr != nil {
-		return errors.Join(err, closeErr)
-	}
-	return err
-}
-```
-
-#### `taskgroup`
-
-```go
-func run(ctx context.Context, db *sql.DB) error {
-	tg := taskgroup.New()
-
-	tg.Defer(func(error) error {
-		return db.Close()
-	})
-
-	tg.AddFunc(func(ctx context.Context) error {
-		return runServices(ctx, db)
-	})
-
-	return tg.Run(ctx)
-}
-```
-
-### Recover task panics as errors
-
-#### `stdlib`
-
-```go
-func run(ctx context.Context) error {
-	done := make(chan error, 1)
-
-	go func() {
-		defer func() {
-			if pc := recover(); pc != nil {
-				done <- fmt.Errorf("panic: %v", pc)
-			}
-		}()
-
-		done <- doWork(ctx)
-	}()
-
-	return <-done
-}
-```
-
-#### `taskgroup`
-
-```go
-func run(ctx context.Context) error {
-	tg := taskgroup.New()
-
-	tg.AddFunc(func(ctx context.Context) error {
-		return doWork(ctx)
-	})
-
-	return tg.Run(ctx)
-}
-```
+Runnable examples are in `example_test.go`. Everything else is in the [godoc](https://pkg.go.dev/github.com/gokern/taskgroup).
 
 ## Signals
 
-`taskgroup.SignalTask()` returns a task that waits for a shutdown signal or
-context cancellation.
-
-```go
-tg.Add(taskgroup.SignalTask())
-```
-
-On Unix, the default signals are `os.Interrupt` and `syscall.SIGTERM`. On
-Windows, the default signal is `os.Interrupt`.
-
-You can pass custom signals:
+`SignalTask()` listens for `os.Interrupt` on Windows and `os.Interrupt + SIGTERM` on Unix. Pass your own to override:
 
 ```go
 tg.Add(taskgroup.SignalTask(syscall.SIGHUP, syscall.SIGTERM))
 ```
 
-Signal errors can be detected with `IsSignalError`:
+Detect a signal shutdown with `IsSignalError`, pull the actual signal out with `SignalFromError`.
 
-```go
-err := tg.Run(ctx)
-if taskgroup.IsSignalError(err) {
-	log.Printf("stopped by signal")
-}
-```
+## Errors
 
-The concrete signal can be extracted with `SignalFromError`:
+`Run` returns the first task error, the run context error, or nil if the first task finished cleanly. Errors from interrupts and defers are joined via `errors.Join`. Ordinary task errors that arrive after shutdown starts are dropped, so `http.ErrServerClosed` doesn't hide the real reason you stopped. Panics are recovered, wrapped with `ErrPanic`, and joined in.
 
-```go
-err := tg.Run(ctx)
-if sig, ok := taskgroup.SignalFromError(err); ok {
-	log.Printf("stopped by signal: %s", sig)
-}
-```
+## Scope
 
-## Error semantics
-
-`Run(ctx)` starts all tasks, even if `ctx` is already canceled. Each task
-receives a context derived from `ctx` and decides how to handle it.
-
-The returned error is built from:
-
-- the primary shutdown reason,
-- panics from `Interrupt` functions,
-- panics from tasks after shutdown begins,
-- and errors or panics from `Defer` functions.
-
-Ordinary task errors after shutdown begins are ignored. This keeps expected
-shutdown errors, such as `http.ErrServerClosed`, from hiding the reason the
-group started shutting down.
-
-## Status
-
-`taskgroup` is small by design. It is meant for application and service
-lifecycle orchestration, not for general-purpose worker pools, result
-collection, or parallel mapping.
+`taskgroup` is for application lifecycle: glue together servers, workers, signal handlers, and cleanup in one place. It's not a worker pool or a replacement for `errgroup` when you want to fan out a batch of jobs and collect their results.
