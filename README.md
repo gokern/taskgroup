@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="img/preview.png" alt="taskgroup — scoped task lifecycles for Go" width="900">
-</p>
-
 # `taskgroup`: scoped task lifecycles for Go
 
 [![CI](https://github.com/gokern/taskgroup/actions/workflows/ci.yml/badge.svg)](https://github.com/gokern/taskgroup/actions/workflows/ci.yml)
@@ -12,6 +8,10 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/gokern/taskgroup)](go.mod)
 [![Release](https://img.shields.io/github/v/release/gokern/taskgroup?include_prereleases&sort=semver)](https://github.com/gokern/taskgroup/releases)
 [![License](https://img.shields.io/github/license/gokern/taskgroup)](LICENSE)
+
+<p align="center">
+  <img src="img/preview.png" alt="taskgroup — scoped task lifecycles for Go" width="900">
+</p>
 
 `taskgroup` helps wire together long-running tasks that should live and stop as
 one unit: servers, workers, signal handlers, background loops, and cleanup
