@@ -25,66 +25,54 @@ Requires Go 1.26+.
 
 ## Example
 
-An HTTP server that stops on Ctrl-C, shuts down gracefully, and closes a database on the way out.
-
-With `taskgroup`:
+A typical `main.go` assembles services and runs them as one unit:
 
 ```go
-func run(ctx context.Context, srv *http.Server, db *sql.DB) error {
-	tg := taskgroup.New()
+func main() {
+	ctx := context.Background()
 
-	tg.Add(taskgroup.NewTask(func(context.Context) error {
-		return srv.ListenAndServe()
-	}).Interrupt(func(error) {
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(sctx)
-	}))
+	tasks := taskgroup.New()
+	tasks.Add(taskgroup.SignalTask())
+	tasks.Add(bootstrap.GRPCServerTask("api", apiGRPC, cfg.APIAddr()))
+	tasks.Add(bootstrap.MetricsServerTask(cfg.Prometheus.Port))
 
-	tg.Add(taskgroup.SignalTask())
-	tg.Defer(func(error) error { return db.Close() })
-
-	return tg.Run(ctx)
-}
-```
-
-Same thing hand-rolled:
-
-```go
-func run(ctx context.Context, srv *http.Server, db *sql.DB) error {
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
-
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- srv.ListenAndServe() }()
-
-	var err error
-	select {
-	case err = <-serverErr:
-	case sig := <-signals:
-		err = fmt.Errorf("signal: %s", sig)
-	case <-ctx.Done():
-		err = ctx.Err()
+	if err := tasks.Run(ctx); err != nil {
+		log.Fatal(err)
 	}
-
-	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return errors.Join(err, srv.Shutdown(sctx), db.Close())
 }
 ```
 
-Each block in the first version handles one thing: the server, the signal listener, the cleanup. The second merges all of it into one select. Adding a fourth concern to that version means rewriting the select.
+Every entry is a ready-made `taskgroup.Task` that knows how to start and stop itself, so `main.go` stays flat. A typical helper looks like this:
+
+```go
+func GRPCServerTask(name string, srv *grpc.Server, addr string) taskgroup.Task {
+	return taskgroup.NewTask(func(context.Context) error {
+		lis, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+		return srv.Serve(lis)
+	}).Interrupt(func(error) {
+		srv.GracefulStop()
+	})
+}
+```
+
+When Ctrl-C or SIGTERM arrives, `SignalTask` returns, the group cancels its run context, and every registered interrupt fires. All tasks exit and `Run` returns their joined errors.
 
 ## API
 
-- `taskgroup.New()` creates a group.
-- `tg.AddFunc(fn)` adds a task.
-- `tg.Add(taskgroup.NewTask(fn).Interrupt(stop))` adds a task with an explicit stop hook.
-- `tg.Add(taskgroup.SignalTask())` stops the group on standard shutdown signals.
-- `tg.Defer(fn)` runs cleanup after every task exits, LIFO like Go `defer`.
-- `tg.Run(ctx)` starts everything and returns the first error.
+Building tasks:
+
+- `taskgroup.NewTask(fn).Interrupt(stop)` — a task with an explicit stop hook.
+- `taskgroup.SignalTask(sigs...)` — a ready-made task that stops on shutdown signals.
+
+Group lifecycle:
+
+- `taskgroup.New()` — create a group.
+- `tg.Add(task)` / `tg.AddFunc(fn)` — add a task.
+- `tg.Defer(fn)` — cleanup after every task exits, LIFO like Go `defer`.
+- `tg.Run(ctx)` — start the group; returns the first error.
 
 Runnable examples are in `example_test.go`. Everything else is in the [godoc](https://pkg.go.dev/github.com/gokern/taskgroup).
 
@@ -96,7 +84,7 @@ Runnable examples are in `example_test.go`. Everything else is in the [godoc](ht
 tg.Add(taskgroup.SignalTask(syscall.SIGHUP, syscall.SIGTERM))
 ```
 
-Detect a signal shutdown with `IsSignalError`, pull the actual signal out with `SignalFromError`.
+Detect a signal shutdown with `IsSignalError`, extract the signal with `SignalFromError`.
 
 ## Errors
 
