@@ -1,5 +1,7 @@
 package taskgroup
 
+import "slices"
+
 // DeferFunc runs after all tasks have returned.
 //
 // It receives the primary shutdown error: the first task error or recovered
@@ -25,9 +27,9 @@ func (g *TaskGroup) Defer(fn DeferFunc) {
 func runDefers(defers []DeferFunc, err error) []error {
 	errs := make([]error, 0, len(defers))
 
-	for i := len(defers) - 1; i >= 0; i-- {
+	for _, fn := range slices.Backward(defers) {
 		deferErr := recoverError(func() error {
-			return defers[i](err)
+			return fn(err)
 		})
 		if deferErr != nil {
 			errs = append(errs, deferErr)
