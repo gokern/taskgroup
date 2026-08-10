@@ -4,6 +4,7 @@
 /.?*
 !/.gitignore
 !/.golangci.yml
+!/.github/
 
 # Go build / test artifacts
 *.exe
