@@ -10,27 +10,8 @@ import (
 // Test with errors.Is(err, taskgroup.ErrPanic) to detect a recovered panic.
 var ErrPanic = errors.New("panic")
 
-type taskResult struct {
-	err   error
-	panic bool
-}
-
-// Named return lets the deferred recover set result on panic.
-//
-//nolint:nonamedreturns
-func recoverTask(fn func() error) (result taskResult) {
-	defer func() {
-		if pc := recover(); pc != nil {
-			result.err = panicToError(pc)
-			result.panic = true
-		}
-	}()
-
-	result.err = fn()
-
-	return result
-}
-
+// recoverError runs fn and returns its error, or, if fn panicked, the recovered
+// value wrapped so errors.Is(err, ErrPanic) holds.
 func recoverError(fn func() error) (err error) {
 	defer func() {
 		if pc := recover(); pc != nil {
@@ -39,6 +20,17 @@ func recoverError(fn func() error) (err error) {
 	}()
 
 	return fn()
+}
+
+// recoverPanic runs fn and returns the recovered panic, or nil. It is the
+// no-result form of recoverError, for a hook that has no error to report and so
+// can only ever contribute a panic.
+func recoverPanic(fn func()) error {
+	return recoverError(func() error {
+		fn()
+
+		return nil
+	})
 }
 
 func panicToError(pc any) error {
@@ -62,6 +54,24 @@ func joinErrors(primary error, errGroups ...[]error) error {
 	return errors.Join(errs...)
 }
 
-func compactErrors(errs []error) []error {
+// panicErrors keeps the recovered panics among errs, the outcomes that survive
+// arriving after the group has stopped. Every recovered panic carries ErrPanic,
+// so the wrapper is the only marker needed.
+func panicErrors(errs []error) []error {
+	panics := make([]error, 0, len(errs))
+
+	for _, err := range errs {
+		if errors.Is(err, ErrPanic) {
+			panics = append(panics, err)
+		}
+	}
+
+	return panics
+}
+
+// nonNilErrors keeps the errors among errs, dropping the empty slots left by
+// tasks that had no interrupt function to run and by interrupts that returned
+// without panicking.
+func nonNilErrors(errs []error) []error {
 	return slices.DeleteFunc(errs, func(err error) bool { return err == nil })
 }

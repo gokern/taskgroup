@@ -4,8 +4,11 @@ import "slices"
 
 // DeferFunc runs after all tasks have returned.
 //
-// It receives the primary shutdown error: the first task error or recovered
-// panic, the run context error, or nil when the first task returned cleanly.
+// It receives the cause of the shutdown: the first task error or recovered
+// panic, the run context's error when the context ended the run, or nil when
+// the first task returned cleanly. Interrupt functions receive the same value.
+// It is not always what Run returns; a canceled run is a cause here and not an
+// error there. See [TaskGroup.Run] for the table.
 type DeferFunc func(error) error
 
 // Defer appends a cleanup function to the TaskGroup.
