@@ -128,6 +128,21 @@ Once the group starts stopping, ordinary task errors are dropped. A task being t
 
 This is true when a task ended the run, not just when the context did. Once the first task to return has decided the run, a second task's error is coming from something already shutting down, so a run whose first task finished cleanly returns nil even if another task then failed. Look at the `main()` at the top of this README: `SignalTask` returns on Ctrl-C, and the servers behind it answer with whatever their own shutdown produces, `grpc.ErrServerStopped` or `http.ErrServerClosed`. Surfacing that second error would surface those too.
 
+That leaves one question: what if the error really did matter? The group can't answer it, but the task can. Report it where you produce it, and let `Run` deal with the run:
+
+```go
+tasks.AddFunc(func(ctx context.Context) error {
+	err := srv.Serve(lis)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("api server: %v", err)
+	}
+
+	return err
+})
+```
+
+The task knows which of its own failures are worth hearing about; the group only knows that it asked everything to stop.
+
 Panics never get dropped. They're recovered, wrapped so `errors.Is(err, ErrPanic)` holds, and joined onto the result via `errors.Join`. The wrapper is what makes something a panic here, not how the task ended, so an error that already carries `ErrPanic` survives shutdown and a nested group's panic stays visible in the group that ran it. Panics out of `Interrupt` functions and errors or panics out of `Defer` functions get joined on too. An `InterruptFunc` returns nothing, so a panic is all it can contribute.
 
 One exception to the table: a group with no tasks has no cause and no result of its own, whatever the context did. Its `Defer` functions see a nil cause even past a deadline, and `Run` returns only what that cleanup contributes.

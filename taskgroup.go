@@ -94,7 +94,8 @@ func (g *TaskGroup) AddFunc(execute ExecuteFunc) {
 // result. This applies however the run ended, so a run whose first task finished
 // cleanly returns nil even if a second task then failed. A cancellation landing
 // while a task is already failing takes that failure with it for the same
-// reason.
+// reason. A task that knows one of its own failures is worth hearing about
+// should report it where it happens instead of relying on Run to carry it.
 //
 // Panics are never dropped. They are recovered, wrapped so
 // errors.Is(err, ErrPanic) holds, and joined onto the result. The wrapper is

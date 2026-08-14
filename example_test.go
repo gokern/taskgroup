@@ -2,6 +2,7 @@ package taskgroup_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gokern/taskgroup"
@@ -104,4 +105,33 @@ func ExampleSignalTask() {
 	}
 	// Output:
 	// stopped cleanly
+}
+
+// Run drops what a task reports once the group is stopping. A task whose error
+// should be heard anyway reports it itself.
+func ExampleTaskGroup_Run_droppedError() {
+	stop := make(chan struct{})
+
+	tg := taskgroup.New()
+
+	tg.Add(taskgroup.NewTask(func(context.Context) error {
+		<-stop
+
+		err := errors.New("flush failed")
+		fmt.Println("worker:", err)
+
+		return err
+	}).Interrupt(func(error) {
+		close(stop)
+	}))
+
+	// A one-shot job that finishes first and ends the run.
+	tg.AddFunc(func(context.Context) error {
+		return nil
+	})
+
+	fmt.Println("Run:", tg.Run(context.Background()))
+	// Output:
+	// worker: flush failed
+	// Run: <nil>
 }
