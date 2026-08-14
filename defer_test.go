@@ -115,7 +115,7 @@ func TestTaskGroup_Defer(t *testing.T) {
 		require.ErrorIs(t, tg.Run(context.Background()), expectedErr)
 	})
 
-	t.Run("receives primary error", func(t *testing.T) {
+	t.Run("receives the cause", func(t *testing.T) {
 		t.Parallel()
 
 		tg := taskgroup.New()

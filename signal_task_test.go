@@ -42,7 +42,7 @@ func TestIsSignalError(t *testing.T) {
 func TestSignalTask(t *testing.T) {
 	t.Parallel()
 
-	t.Run("context cancelled", func(t *testing.T) {
+	t.Run("context canceled is a clean stop", func(t *testing.T) {
 		t.Parallel()
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -51,7 +51,9 @@ func TestSignalTask(t *testing.T) {
 		tg := taskgroup.New()
 		tg.Add(taskgroup.SignalTask())
 
-		require.ErrorIs(t, tg.Run(ctx), context.Canceled)
+		// The task returns ctx.Err(), but the run was canceled, so the group
+		// drops it: the caller asked for the stop and knows it did.
+		require.NoError(t, tg.Run(ctx))
 	})
 }
 

@@ -5,7 +5,9 @@ import "context"
 // ExecuteFunc is the main body of a task.
 type ExecuteFunc func(context.Context) error
 
-// InterruptFunc is called when the TaskGroup starts shutting down.
+// InterruptFunc is called when the TaskGroup starts shutting down. It receives
+// the cause of the shutdown, the same value DeferFunc gets, which is not always
+// what Run returns. See [TaskGroup.Run] for the table.
 //
 // Interrupt functions must be safe to call after their task has already
 // returned. They may run concurrently with other interrupt functions and should

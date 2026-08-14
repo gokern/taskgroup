@@ -2,7 +2,6 @@ package taskgroup_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/gokern/taskgroup"
@@ -96,9 +95,13 @@ func ExampleSignalTask() {
 	case taskgroup.IsSignalError(err):
 		sig, _ := taskgroup.SignalFromError(err)
 		fmt.Println("stopped by signal:", sig)
-	case errors.Is(err, context.Canceled):
-		fmt.Println("canceled")
+	case err != nil:
+		fmt.Println("failed:", err)
+	default:
+		// A canceled run context is not an error: the caller asked for the
+		// stop, so the group has nothing to report.
+		fmt.Println("stopped cleanly")
 	}
 	// Output:
-	// canceled
+	// stopped cleanly
 }
