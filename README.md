@@ -143,7 +143,22 @@ tasks.AddFunc(func(ctx context.Context) error {
 
 The task knows which of its own failures are worth hearing about; the group only knows that it asked everything to stop.
 
-Panics never get dropped. They're recovered, wrapped so `errors.Is(err, ErrPanic)` holds, and joined onto the result via `errors.Join`. The wrapper is what makes something a panic here, not how the task ended, so an error that already carries `ErrPanic` survives shutdown and a nested group's panic stays visible in the group that ran it. Panics out of `Interrupt` functions and errors or panics out of `Defer` functions get joined on too. An `InterruptFunc` returns nothing, so a panic is all it can contribute.
+Panics never get dropped. They're recovered, wrapped so `panics.Is(err)` reports them, and joined onto the result via `errors.Join`. The wrapper is what makes something a panic here, not how the task ended, so an error that already carries a contained panic survives shutdown and a nested group's panic stays visible in the group that ran it. Panics out of `Interrupt` functions and errors or panics out of `Defer` functions get joined on too. An `InterruptFunc` returns nothing, so a panic is all it can contribute.
+
+Recovery goes through [`github.com/gokern/panics`](https://github.com/gokern/panics), the package's only dependency, so a recovered panic also carries the frames between the panic site and the point where the group contained it. The panic vocabulary lives there: `panics.Is`, `panics.As`, `panics.ErrPanic`.
+
+```go
+if err := tg.Run(ctx); err != nil {
+	if p, ok := panics.As(err); ok {
+		frame, _ := runtime.CallersFrames(p.StackTrace()).Next()
+		log.Printf("panic at %s:%d: %v", frame.File, frame.Line, p.Value)
+	}
+}
+```
+
+The stack is a `[]uintptr` behind a `StackTrace()` method, the shape crash reporters look for, so a panic out of a task reaches them pointing at the task instead of at the caller of `Run`. Hand them the joined error rather than an extracted panic: one run can join several — a task, an `Interrupt` and a `Defer` can all blow up in the same shutdown — and `panics.As` returns only the outermost, while a reporter that walks `Unwrap() []error` finds every one of them.
+
+`panics.Is(err)` asks whether a panic was contained *somewhere* in the run, not whether the group did the containing. A task that recovers a panic itself and returns it as an ordinary error matches too, and is kept rather than dropped as shutdown noise — that is the same rule that keeps a nested group's panic visible in the group that ran it.
 
 One exception to the table: a group with no tasks has no cause and no result of its own, whatever the context did. Its `Defer` functions see a nil cause even past a deadline, and `Run` returns only what that cleanup contributes.
 

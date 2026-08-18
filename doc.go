@@ -16,7 +16,8 @@
 // Ordinary task errors that arrive once the group is stopping are dropped;
 // panics never are. Panics from Interrupt functions, errors and panics from
 // Defer functions, and panics from any task are joined with the result.
-// Recovered panics are wrapped with ErrPanic.
+// Recovered panics match panics.Is and carry the stack they came from; reach it
+// with panics.As(err).
 //
 // See the Example functions for common patterns.
 package taskgroup

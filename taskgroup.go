@@ -5,6 +5,8 @@ import (
 	"errors"
 	"slices"
 	"sync"
+
+	"github.com/gokern/panics"
 )
 
 // TaskGroup manages a collection of concurrent tasks.
@@ -97,13 +99,19 @@ func (g *TaskGroup) AddFunc(execute ExecuteFunc) {
 // reason. A task that knows one of its own failures is worth hearing about
 // should report it where it happens instead of relying on Run to carry it.
 //
-// Panics are never dropped. They are recovered, wrapped so
-// errors.Is(err, ErrPanic) holds, and joined onto the result. The wrapper is
-// what marks a panic, not how the task ended, so an error already carrying
-// ErrPanic survives shutdown and a nested group's panic stays visible in the
-// group that ran it. Panics out of Interrupt functions, and errors or panics out
-// of Defer functions, are joined on as well. An InterruptFunc returns nothing,
-// so a panic is all it can contribute.
+// Panics are never dropped. They are recovered, wrapped so panics.Is(err)
+// reports them, and joined onto the result, each carrying the frames between the
+// panic site and the point where the group contained it. The wrapper is what
+// marks a panic, not how the task ended, so an error already carrying a
+// contained panic survives shutdown and a nested group's panic stays visible in
+// the group that ran it. Panics out of Interrupt functions, and errors or panics
+// out of Defer functions, are joined on as well. An InterruptFunc returns
+// nothing, so a panic is all it can contribute.
+//
+// panics.As(err) returns the outermost panic in the error. A single run can join
+// several, so hand the joined error to whatever consumes stacks: a reporter that
+// walks Unwrap() []error finds all of them, and an extracted panic loses the
+// rest.
 //
 // A group with no tasks has no cause and no result of its own; the table does
 // not apply, its Defer functions see a nil cause, and Run returns only what that
@@ -122,7 +130,9 @@ func (g *TaskGroup) Run(ctx context.Context) error {
 
 	deferErrs := runDefers(defers, cause)
 
-	return joinErrors(primary, panicErrs, deferErrs)
+	// errors.Join drops the nils and returns nil when every slot is empty, so a
+	// run with nothing to report needs no guard here.
+	return errors.Join(slices.Concat([]error{primary}, panicErrs, deferErrs)...)
 }
 
 func (g *TaskGroup) start() ([]Task, []DeferFunc) {
@@ -164,7 +174,7 @@ func run(parent context.Context, tasks []Task) ([]error, error, error) {
 	var wg sync.WaitGroup
 	for _, task := range tasks {
 		wg.Go(func() {
-			results <- recoverError(func() error { return task.execute(ctx) })
+			results <- panics.CatchError(func() error { return task.execute(ctx) })
 		})
 	}
 
@@ -257,7 +267,7 @@ func interrupt(tasks []Task, err error) []error {
 		}
 
 		wg.Go(func() {
-			errs[idx] = recoverPanic(func() { task.interrupt(err) })
+			errs[idx] = panics.Catch(func() { task.interrupt(err) })
 		})
 	}
 

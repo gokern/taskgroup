@@ -33,6 +33,7 @@ linters:
           allow:
             - $gostd
             - github.com/gokern/taskgroup
+            - github.com/gokern/panics # the module's only dependency
             - github.com/stretchr/testify
     varnamelen:
       ignore-names:

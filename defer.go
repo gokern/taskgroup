@@ -1,6 +1,10 @@
 package taskgroup
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/gokern/panics"
+)
 
 // DeferFunc runs after all tasks have returned.
 //
@@ -31,7 +35,7 @@ func runDefers(defers []DeferFunc, err error) []error {
 	errs := make([]error, 0, len(defers))
 
 	for _, fn := range slices.Backward(defers) {
-		deferErr := recoverError(func() error {
+		deferErr := panics.CatchError(func() error {
 			return fn(err)
 		})
 		if deferErr != nil {
