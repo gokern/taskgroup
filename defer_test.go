@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gokern/panics"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gokern/taskgroup"
@@ -176,7 +177,7 @@ func TestTaskGroup_Defer(t *testing.T) {
 
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, panicErr)
-		require.ErrorIs(t, err, taskgroup.ErrPanic)
+		require.ErrorIs(t, err, panics.ErrPanic)
 		require.True(t, ran)
 	})
 

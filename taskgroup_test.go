@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gokern/panics"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gokern/taskgroup"
@@ -215,7 +216,7 @@ func TestTaskGroup_Run(t *testing.T) {
 		})
 
 		err := tg.Run(context.Background())
-		require.ErrorIs(t, err, taskgroup.ErrPanic)
+		require.ErrorIs(t, err, panics.ErrPanic)
 		require.Contains(t, err.Error(), "test panic")
 	})
 
@@ -241,7 +242,7 @@ func TestTaskGroup_Run(t *testing.T) {
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, primaryErr)
 		require.ErrorIs(t, err, panicErr)
-		require.ErrorIs(t, err, taskgroup.ErrPanic)
+		require.ErrorIs(t, err, panics.ErrPanic)
 	})
 
 	t.Run("joins interrupt panic with primary error", func(t *testing.T) {
@@ -260,7 +261,7 @@ func TestTaskGroup_Run(t *testing.T) {
 		err := tg.Run(context.Background())
 		require.ErrorIs(t, err, primaryErr)
 		require.ErrorIs(t, err, interruptErr)
-		require.ErrorIs(t, err, taskgroup.ErrPanic)
+		require.ErrorIs(t, err, panics.ErrPanic)
 	})
 
 	t.Run("runs interrupts concurrently", func(t *testing.T) {
@@ -410,7 +411,7 @@ func returns(err error) taskBody {
 	return func(context.Context) error { return err }
 }
 
-func panics(value string) taskBody {
+func panicking(value string) taskBody {
 	return func(context.Context) error { panic(value) }
 }
 
@@ -504,10 +505,10 @@ func contractCases() []contractCase {
 		},
 		{
 			name:      "a panic that arrives first is the run's result",
-			tasks:     []taskBody{panics("boom")},
+			tasks:     []taskBody{panicking("boom")},
 			ending:    endingTaskDecides,
-			wantCause: []error{taskgroup.ErrPanic},
-			wantRun:   []error{taskgroup.ErrPanic},
+			wantCause: []error{panics.ErrPanic},
+			wantRun:   []error{panics.ErrPanic},
 		},
 		{
 			name: "a failure behind a clean finisher is dropped too",
@@ -560,7 +561,7 @@ func contractCases() []contractCase {
 			tasks:      []taskBody{blockThenPanic("boom while stopping")},
 			ending:     endingCancel,
 			wantCause:  []error{context.Canceled},
-			wantRun:    []error{taskgroup.ErrPanic},
+			wantRun:    []error{panics.ErrPanic},
 			notWantRun: []error{context.Canceled},
 		},
 		{
@@ -576,7 +577,7 @@ func contractCases() []contractCase {
 			tasks:     []taskBody{blockThenPanic("boom after deadline")},
 			ending:    endingDeadline,
 			wantCause: []error{context.DeadlineExceeded},
-			wantRun:   []error{context.DeadlineExceeded, taskgroup.ErrPanic},
+			wantRun:   []error{context.DeadlineExceeded, panics.ErrPanic},
 		},
 		{
 			name: "a cancel already in hand is answered the same however the select races",
@@ -608,7 +609,7 @@ func contractCases() []contractCase {
 			blockers:   raceBlockers,
 			ending:     endingCanceledUpFront,
 			wantCause:  []error{context.Canceled},
-			wantRun:    []error{taskgroup.ErrPanic},
+			wantRun:    []error{panics.ErrPanic},
 			notWantRun: []error{context.Canceled},
 		},
 		{
@@ -803,7 +804,7 @@ func TestTaskGroup_SuppressionKeepsJoinedErrors(t *testing.T) {
 		cancel()
 
 		err := <-result
-		require.ErrorIs(t, err, taskgroup.ErrPanic)
+		require.ErrorIs(t, err, panics.ErrPanic)
 		require.Contains(t, err.Error(), "interrupt blew up")
 		require.NotErrorIs(t, err, context.Canceled)
 	})
@@ -862,7 +863,69 @@ func TestTaskGroup_SuppressionKeepsJoinedErrors(t *testing.T) {
 		cancel()
 
 		err := <-result
-		require.ErrorIs(t, err, taskgroup.ErrPanic)
+		require.ErrorIs(t, err, panics.ErrPanic)
 		require.Contains(t, err.Error(), "defer blew up")
+	})
+}
+
+// TestTaskGroup_ContainedPanicsSurviveShutdown pins what the shared sentinel
+// widened. The filter that keeps panics after shutdown has started is
+// panics.Is, so it matches a panic contained anywhere, not only the ones this
+// package recovered itself.
+//
+// The error in each subtest below is dropped as ordinary shutdown noise the moment
+// that filter narrows to taskgroup's own recoveries, and nothing else in the suite
+// notices: every other panic here comes out of a task, an Interrupt or a Defer,
+// where the group does the recovering.
+func TestTaskGroup_ContainedPanicsSurviveShutdown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a task's own contained panic outlives a clean finisher", func(t *testing.T) {
+		t.Parallel()
+
+		interrupted := make(chan struct{})
+
+		tg := taskgroup.New()
+
+		// What any package recovering through panics hands back: the panic never
+		// reached the group, and the task reports it as an ordinary failure.
+		tg.Add(taskgroup.NewTask(func(context.Context) error {
+			<-interrupted
+
+			contained := panics.Catch(func() { panic("inside the task") })
+
+			return fmt.Errorf("delivery failed: %w", contained)
+		}).Interrupt(func(error) { close(interrupted) }))
+
+		tg.AddFunc(func(context.Context) error { return nil })
+
+		err := tg.Run(t.Context())
+
+		require.ErrorIs(t, err, panics.ErrPanic)
+		require.ErrorContains(t, err, "delivery failed: panic: inside the task")
+	})
+
+	t.Run("a nested group's panic stays visible in the group that ran it", func(t *testing.T) {
+		t.Parallel()
+
+		interrupted := make(chan struct{})
+
+		inner := taskgroup.New()
+		inner.AddFunc(func(context.Context) error { panic("inside the inner group") })
+
+		tg := taskgroup.New()
+
+		tg.Add(taskgroup.NewTask(func(ctx context.Context) error {
+			<-interrupted
+
+			return inner.Run(ctx)
+		}).Interrupt(func(error) { close(interrupted) }))
+
+		tg.AddFunc(func(context.Context) error { return nil })
+
+		err := tg.Run(t.Context())
+
+		require.ErrorIs(t, err, panics.ErrPanic)
+		require.ErrorContains(t, err, "panic: inside the inner group")
 	})
 }

@@ -1,72 +1,48 @@
 package taskgroup
 
 import (
-	"errors"
-	"fmt"
 	"slices"
+
+	"github.com/gokern/panics"
 )
 
-// ErrPanic is the sentinel that wraps every panic recovered by the package.
-// Test with errors.Is(err, taskgroup.ErrPanic) to detect a recovered panic.
-var ErrPanic = errors.New("panic")
+// ErrPanic is [panics.ErrPanic] under this package's name, retained so that
+// errors.Is(err, taskgroup.ErrPanic) keeps compiling and keeps matching what it
+// matched in 1.2.0. It is an assignment rather than a sentinel of its own: both
+// names hold the one value.
+//
+// There are still two reasons to move off it. It is a var, so this package now
+// holds a second mutable slot pointing at that value, and two slots are one
+// assignment apart from disagreeing; [panics.Is] asks through a function and has
+// nothing to drift. And the name is narrower than the behaviour — it matches a
+// panic contained anywhere in the error, including one a task recovered itself
+// and reported as an ordinary failure, and one a nested group contained, not
+// only a panic this package recovered. That was already true of the 1.2.0
+// sentinel, so the alias inherits the mismatch rather than introducing it.
+//
+// Deprecated: use [panics.Is]. The alias stays for the life of the 1.x line:
+// removing it is the compatibility break this release exists to avoid, so there
+// is no deadline here and nothing to migrate ahead of.
+var ErrPanic = panics.ErrPanic
 
-// recoverError runs fn and returns its error, or, if fn panicked, the recovered
-// value wrapped so errors.Is(err, ErrPanic) holds.
-func recoverError(fn func() error) (err error) {
-	defer func() {
-		if pc := recover(); pc != nil {
-			err = panicToError(pc)
-		}
-	}()
-
-	return fn()
-}
-
-// recoverPanic runs fn and returns the recovered panic, or nil. It is the
-// no-result form of recoverError, for a hook that has no error to report and so
-// can only ever contribute a panic.
-func recoverPanic(fn func()) error {
-	return recoverError(func() error {
-		fn()
-
-		return nil
-	})
-}
-
-func panicToError(pc any) error {
-	if err, ok := pc.(error); ok {
-		return fmt.Errorf("%w: %w", ErrPanic, err)
-	}
-
-	return fmt.Errorf("%w: %v", ErrPanic, pc)
-}
-
-func joinErrors(primary error, errGroups ...[]error) error {
-	var errs []error
-	if primary != nil {
-		errs = append(errs, primary)
-	}
-
-	for _, group := range errGroups {
-		errs = append(errs, group...)
-	}
-
-	return errors.Join(errs...)
-}
-
-// panicErrors keeps the recovered panics among errs, the outcomes that survive
-// arriving after the group has stopped. Every recovered panic carries ErrPanic,
-// so the wrapper is the only marker needed.
+// panicErrors keeps the contained panics among errs, the outcomes that survive
+// arriving after the group has stopped.
+//
+// [panics.Is] asks whether a panic was contained anywhere in the error, not
+// whether this package recovered it, so a task that contained one itself and
+// reported it as an ordinary error is kept too. That is also what keeps a nested
+// group's panic visible in the group that ran it: from out here the two are the
+// same error.
 func panicErrors(errs []error) []error {
-	panics := make([]error, 0, len(errs))
+	recovered := make([]error, 0, len(errs))
 
 	for _, err := range errs {
-		if errors.Is(err, ErrPanic) {
-			panics = append(panics, err)
+		if panics.Is(err) {
+			recovered = append(recovered, err)
 		}
 	}
 
-	return panics
+	return recovered
 }
 
 // nonNilErrors keeps the errors among errs, dropping the empty slots left by
