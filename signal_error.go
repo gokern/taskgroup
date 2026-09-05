@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-var _ os.Signal = signalError{} //nolint:exhaustruct
+var _ os.Signal = signalError{} //nolint:exhaustruct_v5
 
 type signalError struct {
 	sig os.Signal
